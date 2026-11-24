@@ -1,8 +1,29 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-void main() {
-  runApp(const MyApp());
+Future<void> main() async {
+  await Supabase.initialize(
+    url: 'https://fgkcfbaoumtfdtotihlx.supabase.co',
+    publishableKey: 'sb_publishable_yW6S8619HUxGnAjgSmDJ2g_JuIBIbRo',
+  );
+  final supabase = Supabase.instance.client;
+
+  try {
+    final response = await supabase
+        .from('User')
+        .select()
+        .limit(1);
+
+    print('DATABASE CONNECTION SUCCESSFUL');
+    print(response);
+  } catch (e) {
+    print('DATABASE CONNECTION FAILED');
+    print(e);
+  }
+  runApp(MyApp());
 }
+
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -125,11 +146,85 @@ class _SignupPageState extends State<SignupPage> {
   final username = TextEditingController();
   final password = TextEditingController();
   final confirm = TextEditingController();
+  final email =  TextEditingController();
   bool hidePassword = true, hideConfirm = true;
+  bool isLoading = false;
+
+
+Future<void> signUp() async {
+  if (!formKey.currentState!.validate()) return;
+  if (isLoading) return;
+
+  setState(() {
+    isLoading = true;
+  });
+
+  try {
+    final supabase = Supabase.instance.client;
+
+    // 1. Create Supabase authentication account
+    final response = await supabase.auth.signUp(
+      password: password.text,
+      email: email.text.trim(),
+      data: {
+        'Username': username.text.trim(),
+      },
+    );
+
+    final user = response.user;
+
+    // 2. Print signup information immediately
+    print('USER ID: ${user?.id}');
+    print('USER EMAIL: ${user?.email}');
+    print('SESSION: ${response.session}');
+    print('CURRENT SESSION: ${supabase.auth.currentSession}');
+    print('IDENTITIES: ${user?.identities}');
+
+    if (user == null) {
+      throw Exception('Supabase did not return a user.');
+    }
+
+
+    if (!mounted) return;
+
+    // 4. Navigate to Conversation Step 1
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const ConversationStep1Page(),
+      ),
+    );
+
+  } on AuthException catch (e) {
+    print('AUTH ERROR: ${e.message}');
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(e.message)),
+    );
+
+  } catch (e) {
+    print('SIGNUP / DATABASE ERROR: $e');
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Signup failed: $e')),
+    );
+
+  } finally {
+    if (mounted) {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+}
 
   @override
   void dispose() {
-    username.dispose(); password.dispose(); confirm.dispose(); super.dispose();
+    username.dispose(); password.dispose(); confirm.dispose(); email.dispose();super.dispose();
   }
 
   @override
@@ -147,6 +242,9 @@ class _SignupPageState extends State<SignupPage> {
           const SizedBox(height: 22),
           AppTextField(label: 'Username', hint: 'Choose a username', controller: username,
             validator: (v) => v == null || v.trim().isEmpty ? 'Enter a username' : null),
+          const SizedBox(height: 22),
+          AppTextField(label: 'Email', hint: 'Choose a email', controller: email,
+             validator: (v) => v == null || v.trim().isEmpty ? 'Enter a email' : null),
           const SizedBox(height: 13),
           AppTextField(label: 'Password', hint: 'Create a password', controller: password,
             obscure: hidePassword, suffix: IconButton(
@@ -160,11 +258,7 @@ class _SignupPageState extends State<SignupPage> {
               icon: Icon(hideConfirm ? Icons.visibility_outlined : Icons.visibility_off_outlined)),
             validator: (v) => v != password.text ? 'Passwords do not match' : null),
           const SizedBox(height: 20),
-          PrimaryButton(label: 'Continue', onPressed: () {
-            if (formKey.currentState!.validate()) {
-              Navigator.push(context, MaterialPageRoute(builder: (_) => const ConversationStep1Page()));
-            }
-          }),
+          PrimaryButton(label: 'Continue', onPressed: signUp),
           TextButton(
             onPressed: () {
               Navigator.push(
@@ -191,12 +285,50 @@ class ConversationStep1Page extends StatefulWidget {
 }
 class _ConversationStep1PageState extends State<ConversationStep1Page> {
   String feeling = 'A little anxious', duration = 'A few days', noticed = 'Recently', frequency = 'A few times a week';
+  Future<void> saveStep1() async{
+    final supabase = Supabase.instance.client;
+    final user = supabase.auth.currentUser;
+    if (user == null){
+        throw Exception ('User is not logged in. Please sign in again.');
+
+    }
+    await supabase.from('user_onboarding').upsert({
+        'user_id':user.id,
+        'feeling':feeling,
+        'duration':duration,
+        'noticed': noticed,
+        'frequency': frequency,
+        },
+        onConflict: 'user_id',
+        );
+
+  }
+  Future<void> continueButton1() async{
+    try{
+        await saveStep1();
+        if(!mounted){
+            return;
+        }
+        Navigator.push(
+            context,
+            MaterialPageRoute(
+            builder: (_) => ConversationStep2Page(),
+            ),
+        );
+    }catch(error){
+        if(!mounted) return;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not save your answers : $error')),
+        );
+    }
+  }
   @override
   Widget build(BuildContext context) => OnboardingScaffold(
     step: 1, title: 'A Little About You',
     subtitle: "I'm here to support your well-being. Let's start with what brings you here.",
     buttonText: 'Continue',
-    onContinue: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ConversationStep2Page())),
+    onContinue: continueButton1,
     children: [
       Question(label: 'What would you like help with today?', value: feeling,
         options: const ['A little anxious', 'Feeling stressed', 'Feeling low', 'Sleep difficulties', 'Just checking in'],
@@ -221,12 +353,51 @@ class ConversationStep2Page extends StatefulWidget {
 }
 class _ConversationStep2PageState extends State<ConversationStep2Page> {
   String diagnosis = 'Prefer not to say', support = 'Not currently', symptoms = 'Racing heart';
+  Future<void> saveStep2() async {
+    final supabase = Supabase.instance.client;
+    final user = supabase.auth.currentUser;
+    if (user == null){
+        throw Exception ('User is not logged in. Please sign in again.');
+
+    }
+
+    await supabase.from('user_onboarding').upsert({
+            'user_id':user.id,
+            'diagnosis':diagnosis,
+            'support':support,
+            'symptoms': symptoms,
+            },
+            onConflict: 'user_id',
+            );
+
+
+  }
+  Future<void> continueButton2() async{
+      try{
+          await saveStep2();
+          if(!mounted){
+              return;
+          }
+          Navigator.push(
+              context,
+              MaterialPageRoute(
+              builder: (_) => ConversationStep3Page(),
+              ),
+          );
+      }catch(error){
+          if(!mounted) return;
+
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Could not save your answers : $error')),
+          );
+      }
+   }
   @override
   Widget build(BuildContext context) => OnboardingScaffold(
     step: 2, title: 'A Little About Your Health',
     subtitle: "Thank you for sharing. These optional questions help BayMax understand your wellness needs.",
     buttonText: 'Continue',
-    onContinue: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ConversationStep3Page())),
+    onContinue: continueButton2,
     children: [
       Question(label: 'Have you ever received a mental health diagnosis from a healthcare professional?', value: diagnosis,
         options: const ['Yes', 'No', 'Prefer not to say'],
@@ -248,13 +419,51 @@ class ConversationStep3Page extends StatefulWidget {
 }
 class _ConversationStep3PageState extends State<ConversationStep3Page> {
   String trigger = 'Uncertainty or change', coping = 'Talking to someone', goal = 'Feel calmer';
+  Future<void> saveStep3() async {
+      final supabase = Supabase.instance.client;
+      final user = supabase.auth.currentUser;
+      if (user == null){
+          throw Exception ('User is not logged in. Please sign in again.');
+
+      }
+
+      await supabase.from('user_onboarding').upsert({
+              'user_id':user.id,
+              'trigger':trigger,
+              'coping':coping,
+              'goal': goal,
+              },
+              onConflict: 'user_id',
+              );
+
+
+    }
+    Future<void> continueButton3() async{
+        try{
+            await saveStep3();
+            if(!mounted){
+                return;
+            }
+            Navigator.push(
+                context,
+                MaterialPageRoute(
+                builder: (_) => LoginPage(),
+                ),
+            );
+        }catch(error){
+            if(!mounted) return;
+
+            ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Could not save your answers : $error')),
+            );
+        }
+      }
   @override
   Widget build(BuildContext context) => OnboardingScaffold(
     step: 3, title: 'What Affects Your Mood?',
     subtitle: 'There are no right or wrong answers. Choose what feels closest to your experience.',
     buttonText: "Let's Start",
-    onContinue: () => Navigator.pushAndRemoveUntil(context,
-      MaterialPageRoute(builder: (_) => const WelcomePage()), (_) => false),
+    onContinue: continueButton3,
     children: [
       Question(label: 'When do you usually feel stressed or uncomfortable?', value: trigger,
         options: const ['Uncertainty or change', 'School or work', 'Social situations', 'Being alone', 'Health concerns', 'Not sure'],
@@ -313,81 +522,6 @@ class OnboardingScaffold extends StatelessWidget {
   );
 }
 
-class WelcomePage extends StatelessWidget {
-  const WelcomePage({super.key});
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: pink,
-    body: SafeArea(child: Center(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(children: [
-      const Brand(),
-      const SizedBox(height: 28),
-      const Mascot(height: 230),
-      const SizedBox(height: 20),
-      const Text('BayMax is ready!', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: ink)),
-      const SizedBox(height: 8),
-      const Text("Your wellness journey starts with one small step. I'm here to listen, Human.",
-        textAlign: TextAlign.center, style: TextStyle(color: muted, height: 1.5)),
-      const SizedBox(height: 26),
-      PrimaryButton(label: 'Open BayMax Chat', onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DemoChatPage()))),
-      const SizedBox(height: 12),
-      OutlinedButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DemoHistoryPage())),
-        child: const Text('View Wellness History')),
-    ])))),
-  );
-}
-
-class DemoChatPage extends StatefulWidget {
-  const DemoChatPage({super.key});
-  @override
-  State<DemoChatPage> createState() => _DemoChatPageState();
-}
-class _DemoChatPageState extends State<DemoChatPage> {
-  final controller = TextEditingController();
-  final messages = <String>["BayMax: Hello, Human! I'm here to listen. How are you feeling today?"];
-  @override
-  void dispose() { controller.dispose(); super.dispose(); }
-  void send() {
-    final text = controller.text.trim(); if (text.isEmpty) return;
-    setState(() { messages.add('You: $text'); messages.add("BayMax: Thank you for telling me. Let's take this one step at a time."); controller.clear(); });
-  }
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Chat with BayMax'), backgroundColor: pink),
-    backgroundColor: pinkLight,
-    body: Column(children: [
-      Expanded(child: ListView(padding: const EdgeInsets.all(16), children: [
-        for (final message in messages) Align(alignment: message.startsWith('You:') ? Alignment.centerRight : Alignment.centerLeft,
-          child: Container(margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(13),
-            constraints: const BoxConstraints(maxWidth: 310),
-            decoration: BoxDecoration(color: message.startsWith('You:') ? sage : Colors.white, borderRadius: BorderRadius.circular(16)),
-            child: Text(message))),
-        Wrap(spacing: 7, children: [
-          ActionChip(label: const Text('I feel anxious'), onPressed: () { controller.text = 'I feel anxious'; send(); }),
-          ActionChip(label: const Text('Help me relax'), onPressed: () { controller.text = 'Help me relax'; send(); }),
-        ]),
-      ])),
-      Padding(padding: const EdgeInsets.all(12), child: Row(children: [
-        Expanded(child: TextField(controller: controller, onSubmitted: (_) => send(), decoration: InputDecoration(hintText: 'Type your message...', filled: true, fillColor: Colors.white, border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none)))),
-        IconButton(onPressed: send, icon: const Icon(Icons.send_rounded, color: sageDark)),
-      ])),
-    ]),
-  );
-}
-
-class DemoHistoryPage extends StatelessWidget {
-  const DemoHistoryPage({super.key});
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Wellness History'), backgroundColor: pink),
-    backgroundColor: pink,
-    body: ListView(padding: const EdgeInsets.all(18), children: const [
-      MetricTile(icon: Icons.psychology_alt_rounded, title: 'Anxiety Episodes', value: '4'),
-      MetricTile(icon: Icons.sentiment_satisfied_alt_rounded, title: 'Mood Summary', value: 'Good'),
-      MetricTile(icon: Icons.speed_rounded, title: 'Average Stress', value: '5.2/10'),
-      MetricTile(icon: Icons.bedtime_rounded, title: 'Sleep', value: '6.4 hours'),
-    ]),
-  );
-}
 class MetricTile extends StatelessWidget {
   final IconData icon; final String title, value;
   const MetricTile({super.key, required this.icon, required this.title, required this.value});
@@ -600,6 +734,32 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final _username = TextEditingController();
   final _password = TextEditingController();
+  Future<void> login() async{
+    final supabase = Supabase.instance.client;
+    try{
+        final data = await supabase
+        .from('User')
+        .select('email')
+        .eq('Username', _username.text.trim())
+        .maybeSingle();
+
+        if (data == null) {
+              print('Username not found');
+              return;
+        }
+
+        final response = await supabase.auth.signInWithPassword(
+              email: data['email'],
+              password: _password.text,
+        );
+        print('Login successful!');
+    }on AuthException catch (e) {
+         print('Login failed: ${e.message}');
+       } catch (e) {
+         print('Error: $e');
+       }
+
+  }
 
   @override
   void dispose() {
